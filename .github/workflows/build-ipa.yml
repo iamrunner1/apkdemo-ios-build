@@ -67,18 +67,24 @@ jobs:
         working-directory: src
         run: |
           set -e
-          APP="dd/Build/Products/Release-iphoneos/ApkDemo.app"
-          if [ ! -d "$APP" ]; then
-            echo "::error::没找到 ApkDemo.app，列出现有的："
-            find dd -maxdepth 6 -name "*.app" -print
+          echo "=== dd 结构（前 40 个目录）==="
+          find dd -maxdepth 4 -type d 2>/dev/null | head -40
+          APP=$(find dd -type d -name "*.app" 2>/dev/null | head -n 1)
+          if [ -z "$APP" ]; then
+            echo "::error::没找到任何 .app，列出 Products 候选："
+            find . -maxdepth 6 -type d -name "Products" 2>/dev/null | head -20
+            find . -maxdepth 8 -type f -name "ApkDemo" 2>/dev/null | head -20
             exit 1
           fi
+          echo "app 路径：$APP"
           echo "app 体积：$(du -sh "$APP")"
           rm -rf Payload ApkDemo.ipa
           mkdir -p Payload
-          cp -R "$APP" Payload/
+          cp -R "$APP" "Payload/$(basename "$APP")"
           zip -qry ApkDemo.ipa Payload
           ls -lh ApkDemo.ipa
+          echo "Payload 内容："
+          ls -1 Payload
 
       - name: 回传到私有仓库的 Release
         if: success()
