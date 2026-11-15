@@ -33,15 +33,15 @@ jobs:
       - name: 准备 ios-cmake 工具链
         working-directory: src
         run: |
-          sh Samples/Metal/thirdParty/scripts/setup_ios_cmake/setup_ios_cmake
-          ls -1 Samples/Metal/thirdParty/scripts/ios-cmake | head -3
+          sh Samples/Metal/thirdParty/scripts/setup_ios_cmake
+          ls -1 Samples/Metal/thirdParty/ios-cmake | head -3
 
       - name: 生成 Xcode 工程
         working-directory: src
         run: |
           cmake -S Samples/Metal/Demo/proj.ios.apkdemo.cmake \
                 -B build_ios \
-                -D CMAKE_TOOLCHAIN_FILE="$PWD/Samples/Metal/thirdParty/scripts/ios-cmake/ios.toolchain.cmake" \
+                -D CMAKE_TOOLCHAIN_FILE="$PWD/Samples/Metal/thirdParty/ios-cmake/ios.toolchain.cmake" \
                 -D PLATFORM=OS64 \
                 -D CSM_MAC_CATALYST=OFF \
                 -G Xcode
