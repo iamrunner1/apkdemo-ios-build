@@ -1,0 +1,120 @@
+name: Build iOS IPA
+
+# 运行在「公开仓库」里，用公开仓库的 Actions 额度（不扣私有仓库的 macOS 10 倍计费）。
+# 源码从「私有仓库」拉，编出来的 ipa 直接回传到「私有仓库」的 Release。
+# 公开仓库本身不保留任何产物，避免 SDK / 模型资源被公开下载。
+#
+# 需要配置两个 Secret：
+#   PRIVATE_REPO   形如 yourname/apkdemo-ios-private
+#   PRIVATE_TOKEN  能读写该私有仓库的 PAT（fine-grained，勾 Contents: Read/Write）
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-ipa.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: 从私有仓库取源码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO }}
+          token: ${{ secrets.PRIVATE_TOKEN }}
+          path: src
+
+      - name: 环境信息
+        run: |
+          xcodebuild -version
+          cmake --version
+          echo "arch=$(uname -m)"
+
+      - name: 准备 ios-cmake 工具链
+        working-directory: src
+        run: |
+          sh Samples/Metal/thirdParty/scripts/setup_ios_cmake/setup_ios_cmake
+          ls -1 Samples/Metal/thirdParty/scripts/ios-cmake | head -3
+
+      - name: 生成 Xcode 工程
+        working-directory: src
+        run: |
+          cmake -S Samples/Metal/Demo/proj.ios.apkdemo.cmake \
+                -B build_ios \
+                -D CMAKE_TOOLCHAIN_FILE="$PWD/Samples/Metal/thirdParty/scripts/ios-cmake/ios.toolchain.cmake" \
+                -D PLATFORM=OS64 \
+                -D CSM_MAC_CATALYST=OFF \
+                -G Xcode
+
+      - name: 编译 ApkDemo（Release、不签名）
+        working-directory: src
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project build_ios/ApkDemo.xcodeproj \
+            -scheme ApkDemo \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            ENABLE_BITCODE=NO \
+            build 2>&1 | tee build.log
+
+      - name: 打包 IPA
+        working-directory: src
+        run: |
+          set -e
+          APP="dd/Build/Products/Release-iphoneos/ApkDemo.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::没找到 ApkDemo.app，列出现有的："
+            find dd -maxdepth 6 -name "*.app" -print
+            exit 1
+          fi
+          echo "app 体积：$(du -sh "$APP")"
+          rm -rf Payload ApkDemo.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry ApkDemo.ipa Payload
+          ls -lh ApkDemo.ipa
+
+      - name: 回传到私有仓库的 Release
+        if: success()
+        env:
+          TOKEN: ${{ secrets.PRIVATE_TOKEN }}
+          REPO: ${{ secrets.PRIVATE_REPO }}
+        working-directory: src
+        run: |
+          set -e
+          TAG="build-$(date -u +%Y%m%d-%H%M%S)"
+          echo "创建 tag：$TAG"
+          RESP=$(curl -s -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/releases" \
+            -d "{\"tag_name\":\"$TAG\",\"target_commitish\":\"main\",\"name\":\"$TAG\",\"body\":\"Actions 自动构建（无签名，用 Esign 自签安装）\"}")
+          UPLOAD_URL=$(echo "$RESP" | jq -r '.upload_url' | sed 's/{?name,label}//')
+          if [ "$UPLOAD_URL" = "null" ] || [ -z "$UPLOAD_URL" ]; then
+            echo "::error::创建 Release 失败"; echo "$RESP"; exit 1
+          fi
+          curl -s -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @ApkDemo.ipa \
+            "$UPLOAD_URL?name=ApkDemo.ipa"
+          echo ""
+          echo "已上传到 https://github.com/$REPO/releases/tag/$TAG"
+
+      - name: 失败时保留编译日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: src/build.log
+          if-no-files-found: warn
+          retention-days: 3
