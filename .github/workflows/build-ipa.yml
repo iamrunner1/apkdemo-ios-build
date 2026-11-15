@@ -69,14 +69,17 @@ jobs:
           set -e
           echo "=== dd 结构（前 40 个目录）==="
           find dd -maxdepth 4 -type d 2>/dev/null | head -40
-          APP=$(find dd -type d -name "*.app" 2>/dev/null | head -n 1)
+          APP=$(find . -type d -name "*.app" 2>/dev/null | head -n 1)
           if [ -z "$APP" ]; then
-            echo "::error::没找到任何 .app，列出 Products 候选："
-            find . -maxdepth 6 -type d -name "Products" 2>/dev/null | head -20
+            echo "::error::没找到任何 .app，列出候选："
+            find . -maxdepth 8 -type d -name "Release*" 2>/dev/null | head -20
             find . -maxdepth 8 -type f -name "ApkDemo" 2>/dev/null | head -20
             exit 1
           fi
           echo "app 路径：$APP"
+          echo "=== .app 顶层内容 ==="
+          ls -1 "$APP"
+          echo "Res 体积：$(du -sh "$APP/Res" 2>/dev/null || echo 缺失)"
           echo "app 体积：$(du -sh "$APP")"
           rm -rf Payload ApkDemo.ipa
           mkdir -p Payload
