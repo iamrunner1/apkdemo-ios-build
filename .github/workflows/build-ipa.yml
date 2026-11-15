@@ -13,8 +13,8 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
-    timeout-minutes: 60
+    runs-on: macos-15-intel
+    timeout-minutes: 100
 
     steps:
       - name: 从私有仓库取源码
