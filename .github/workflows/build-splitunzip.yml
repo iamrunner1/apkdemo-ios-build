@@ -1,0 +1,114 @@
+name: Build SplitUnzip IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+
+    steps:
+      - name: 取源码（只拉 splitunzip 子目录）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO }}
+          token: ${{ secrets.PRIVATE_TOKEN }}
+          path: src
+          sparse-checkout: splitunzip
+          sparse-checkout-cone-mode: false
+
+      - name: 环境信息
+        run: |
+          xcodebuild -version
+          cmake --version
+          echo "arch=$(uname -m)"
+          ls -la src
+
+      - name: 准备 ios-cmake 工具链
+        working-directory: src/splitunzip
+        run: |
+          curl -sL -o ios.toolchain.cmake https://raw.githubusercontent.com/leetal/ios-cmake/master/ios.toolchain.cmake
+          wc -c ios.toolchain.cmake
+          head -5 ios.toolchain.cmake
+
+      - name: 生成 Xcode 工程
+        working-directory: src/splitunzip
+        run: |
+          cmake -S . -B build_ios \
+            -D CMAKE_TOOLCHAIN_FILE="$PWD/ios.toolchain.cmake" \
+            -D PLATFORM=OS64 \
+            -D DEPLOYMENT_TARGET=14.0 \
+            -D CMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -G Xcode
+
+      - name: 编译 SplitUnzip
+        working-directory: src/splitunzip
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project build_ios/SplitUnzip.xcodeproj \
+            -scheme SplitUnzip \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            ENABLE_BITCODE=NO \
+            build 2>&1 | tee build.log
+
+      - name: 打包 IPA
+        working-directory: src/splitunzip
+        run: |
+          set -e
+          APP=$(find . -type d -name "*.app" 2>/dev/null | head -n 1)
+          if [ -z "$APP" ]; then
+            echo "::error::没找到 .app"
+            find . -maxdepth 6 -type d -name "Release*" | head -10
+            exit 1
+          fi
+          echo "app: $APP"
+          ls -1 "$APP"
+          du -sh "$APP"
+          rm -rf Payload SplitUnzip.ipa
+          mkdir -p Payload
+          cp -R "$APP" "Payload/$(basename "$APP")"
+          zip -qry SplitUnzip.ipa Payload
+          ls -lh SplitUnzip.ipa
+
+      - name: 回传到私有仓库 Release
+        if: success()
+        env:
+          TOKEN: ${{ secrets.PRIVATE_TOKEN }}
+          REPO: ${{ secrets.PRIVATE_REPO }}
+        working-directory: src/splitunzip
+        run: |
+          set -e
+          TAG="splitunzip-$(date -u +%Y%m%d-%H%M%S)"
+          RESP=$(curl -s -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/releases" \
+            -d "{\"tag_name\":\"$TAG\",\"target_commitish\":\"main\",\"name\":\"$TAG\",\"body\":\"SplitUnzip 自动构建（未签名，ESign 自签安装）\"}")
+          UPLOAD_URL=$(echo "$RESP" | jq -r '.upload_url' | sed 's/{?name,label}//')
+          if [ "$UPLOAD_URL" = "null" ] || [ -z "$UPLOAD_URL" ]; then
+            echo "::error::创建 Release 失败"; echo "$RESP"; exit 1
+          fi
+          curl -s -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @SplitUnzip.ipa \
+            "$UPLOAD_URL?name=SplitUnzip.ipa"
+          echo ""
+          echo "已上传 https://github.com/$REPO/releases/tag/$TAG"
+
+      - name: 失败时保留日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: src/splitunzip/build.log
+          if-no-files-found: warn
+          retention-days: 3
